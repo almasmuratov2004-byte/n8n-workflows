@@ -1,0 +1,1458 @@
+{
+  "name": "prod",
+  "nodes": [
+    {
+      "parameters": {
+        "action": "generate"
+      },
+      "id": "a01b0cf5-29c2-44e8-a20d-b15cb9270009",
+      "name": "Crypto",
+      "type": "n8n-nodes-base.crypto",
+      "typeVersion": 1,
+      "position": [
+        448,
+        896
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.mainUrl }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        896,
+        896
+      ],
+      "id": "f1698296-ae19-472f-8625-eee98f55a7f6",
+      "name": "GET HTML по MainURL",
+      "retryOnFail": true,
+      "waitBetweenTries": 2000,
+      "maxTries": 2,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "=https://{{ $('Crypto').item.json.host }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1120,
+        896
+      ],
+      "id": "18f51f8e-53b7-4a70-81ef-f62d9a785038",
+      "name": "GET HTML по Host",
+      "retryOnFail": true,
+      "waitBetweenTries": 2000,
+      "maxTries": 2,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const mainUrlItems = $(\"GET HTML по MainURL\").all();\nconst hostUrlItems = $(\"GET HTML по Host\").all();\nconst imagePageUrlItems = $(\"GET HTML по ImagePageUrl\").all();\n\nconst hostUrlSource = $(\"Crypto\").all();\nconst mainUrlSource = $(\"Поиск главного домена и URL для whois\").all();\nconst imagePageUrlSource = $(\"Crypto\").all();\n\nconst total = Math.min(mainUrlItems.length, hostUrlItems.length, imagePageUrlItems.length);\n\nconst ignoredDomains = [\n  // \"dzen\", \n  // \"dzeninfra\", \n  // \"pinterest\", \n  // \"auto.ru\",\n  \"testtesttest\"\n  \n];\n\nfunction extractDomain(url = \"\") {\n  const clean = url.replace(/^https?:\\/\\//, \"\").replace(/^www\\./, \"\");\n  return clean.split(/[\\/?#]/)[0];\n}\n\nfunction isIgnored(url = \"\") {\n  if (!url) return false;\n  const domain = extractDomain(url.toLowerCase());\n  return ignoredDomains.some(word => domain.includes(word));\n}\n\nfunction extractData(html, baseUrl = \"\") {\n  const text = html\n    .replace(/<script[\\s\\S]*?<\\/script>/gi, \" \")  // вырезаем JS\n    .replace(/<style[\\s\\S]*?<\\/style>/gi, \" \")    // вырезаем CSS\n    .replace(/<[^>]*>/g, \" \")                     // убираем теги\n    .replace(/\\s{2,}/g, \" \")                      // нормализуем пробелы\n    .trim();\n\n  const phoneRegex = /(?:\\+7|7|8)(?:[\\s\\-()]*\\d){10}\\b/g;\n  const phones = Array.from(\n    new Set(\n      (text.match(phoneRegex) || [])\n        .map(p => p.replace(/[^\\d+]/g, \"\"))\n        .map(p => p.replace(/^7/, \"+7\").replace(/^8/, \"+7\"))\n    )\n  );\n\n  const emailRegex = /(?:mailto:)?[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}/gi;\n  const emails = Array.from(\n    new Set((text.match(emailRegex) || []).map(e => e.replace(/^mailto:/i, \"\")))\n  );\n\n  const innBlockRegex = /(?:ИНН|INN|Tax[\\s-]?ID|ИHH|ИHН)[^0-9]{0,10}(\\d{10,12})/gi;\n  const inns = Array.from(\n    new Set(\n      [...text.matchAll(innBlockRegex)]\n        .map(match => match[1])\n        .filter(Boolean)\n    )\n  );\n\n  const contactRegex = /href\\s*=\\s*[\"']([^\"']*(?:contact|kontact|контакт|контакты)[^\"']*)[\"']/gi;\n  const links = (html.match(contactRegex) || [])\n    .map(h => h.match(/[\"']([^\"']+)[\"']/)?.[1])\n    .filter(Boolean);\n\n  let normalizedBase = baseUrl.trim();\n  if (normalizedBase && !/^https?:\\/\\//i.test(normalizedBase)) {\n    normalizedBase = `https://${normalizedBase}`;\n  }\n\n  try {\n    const domainMatch = normalizedBase.match(/^https?:\\/\\/[^/]+/i);\n    if (domainMatch) normalizedBase = domainMatch[0];\n  } catch {\n  }\n\n  if (normalizedBase.endsWith(\"/\")) normalizedBase = normalizedBase.slice(0, -1);\n\n  const contactLinks = Array.from(\n    new Set(\n      links.map(link => {\n        if (!link) return null;\n        if (link.startsWith(\"http\")) return link;\n        if (link.startsWith(\"//\")) return `https:${link}`;\n        const normalizedLink = link.startsWith(\"/\") ? link : `/${link}`;\n        return normalizedBase ? `${normalizedBase}${normalizedLink}` : link;\n      })\n    )\n  );\n\n  return { phones, emails, inns, contactLinks };\n}\n\nfunction uniq(arr) {\n  return Array.from(new Set(arr.filter(Boolean)));\n}\n\nconst results = [];\n\nfor (let i = 0; i < total; i++) {\n  const main = mainUrlItems[i]?.json || {};\n  const host = hostUrlItems[i]?.json || {};\n  const image = imagePageUrlItems[i]?.json || {};\n\n  const mainUrl = mainUrlSource[i]?.json.mainUrl || \"\";\n  const hostUrl = hostUrlSource[i]?.json.host || \"\";\n  const imagePageUrl = imagePageUrlSource[i]?.json.pageUrl || \"\";\n\n  const mainIgnored = isIgnored(mainUrl);\n  const hostIgnored = isIgnored(hostUrl);\n  const imageIgnored = isIgnored(imagePageUrl);\n\n  if (mainIgnored && hostIgnored && imageIgnored) {\n    results.push({\n      json: {\n        index: i + 1,\n        Source: [mainUrl, hostUrl, imagePageUrl].filter(Boolean),\n        Ignored: true,\n        Reason: `All URLs ignored: ${[mainUrl, hostUrl, imagePageUrl].filter(Boolean).join(\", \")}`,\n      },\n    });\n    continue;\n  }\n\n  const htmlMain = mainIgnored ? \"\" : (main.data || main.body || \"\");\n  const htmlHost = hostIgnored ? \"\" : (host.data || host.body || \"\");\n  const htmlImage = imageIgnored ? \"\" : (image.data || image.body || \"\");\n\n  if (!htmlMain && !htmlHost && !htmlImage) {\n    results.push({\n      json: {\n        index: i + 1,\n        Source: [mainUrl, hostUrl, imagePageUrl].filter(Boolean),\n        Error: \"No HTML received (all filtered or failed)\",\n      },\n    });\n    continue;\n  }\n\n  const parsedMain = htmlMain ? extractData(htmlMain, mainUrl) : { phones: [], emails: [], inns: [], contactLinks: [] };\n  const parsedHost = htmlHost ? extractData(htmlHost, hostUrl) : { phones: [], emails: [], inns: [], contactLinks: [] };\n  const parsedImage = htmlImage ? extractData(htmlImage, imagePageUrl) : { phones: [], emails: [], inns: [], contactLinks: [] };\n\n  const sourcesUsed = [];\n  if (htmlMain && (parsedMain.phones.length || parsedMain.emails.length || parsedMain.inns.length)) sourcesUsed.push(mainUrl);\n  if (htmlHost && (parsedHost.phones.length || parsedHost.emails.length || parsedHost.inns.length)) sourcesUsed.push(hostUrl);\n  if (htmlImage && (parsedImage.phones.length || parsedImage.emails.length || parsedImage.inns.length)) sourcesUsed.push(imagePageUrl);\n  if (!sourcesUsed.length) {\n    if (htmlMain) sourcesUsed.push(mainUrl);\n    if (htmlHost) sourcesUsed.push(hostUrl);\n    if (htmlImage) sourcesUsed.push(imagePageUrl);\n  }\n\n  const result = {\n    index: i + 1,\n    Source: uniq(sourcesUsed),\n    Phones: uniq([...parsedMain.phones, ...parsedHost.phones, ...parsedImage.phones]),\n    Emails: uniq([...parsedMain.emails, ...parsedHost.emails, ...parsedImage.emails]),\n    INN: uniq([...parsedMain.inns, ...parsedHost.inns, ...parsedImage.inns]),\n    ContactLinks: uniq([...parsedMain.contactLinks, ...parsedHost.contactLinks, ...parsedImage.contactLinks]),\n  };\n\n  results.push({ json: result });\n}\n\nreturn results;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1552,
+        896
+      ],
+      "id": "89cef0bb-b521-467c-9742-be406ee356a9",
+      "name": "Скрапинг Host и MainUrl",
+      "executeOnce": false,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1120,
+        1152
+      ],
+      "id": "22c7e663-2afb-4d59-a189-46b839d454e5",
+      "name": "Wait",
+      "webhookId": "226c0b94-86cb-4a1f-a827-4d754dde7f11",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://egrul.nalog.ru/",
+        "sendHeaders": true,
+        "specifyHeaders": "json",
+        "jsonHeaders": "={\n  \"Content-Type\": \"application/x-www-form-urlencoded\"\n}\n ",
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "={{ $('Парсинг данных с контактов и Merge').item.json.INN[0] }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        448,
+        1152
+      ],
+      "id": "d95b6d98-25ba-441a-b178-3bf580ab098e",
+      "name": "Поиск по ИНН",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "=https://egrul.nalog.ru/search-result/{{ $('Поиск по ИНН').item.json.body.t }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        672,
+        1152
+      ],
+      "id": "b7330a63-2c3f-4dda-9c7b-5f166e71f2d3",
+      "name": "Получение данных по ИНН",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "=https://egrul.nalog.ru/vyp-request/{{ $json.rows[0].t }}",
+        "sendHeaders": true,
+        "specifyHeaders": "json",
+        "jsonHeaders": "{\n  \"Accept\": \"application/json, text/javascript, */*; q=0.01\",\n  \"Accept-Language\": \"ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7\",\n  \"Referer\": \"https://egrul.nalog.ru/index.html\",\n  \"User-Agent\": \"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36\",\n  \"X-Requested-With\": \"XMLHttpRequest\",\n  \"Connection\": \"keep-alive\"\n}",
+        "options": {
+          "timeout": 2000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        896,
+        1152
+      ],
+      "id": "99d25114-ea52-4925-a3df-b05dbfc02ad9",
+      "name": "Запрос на создание",
+      "executeOnce": false,
+      "retryOnFail": true,
+      "waitBetweenTries": 2000,
+      "maxTries": 2,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const contactPages = $('GET HTML страницы контактов').all();\nconst mainResults = $('Скрапинг Host и MainUrl').all();\nconst whoIsResults = $('GET Whois').all();\n\nconst WHOIS_LABELS = {\n  objectClassName: \"Тип объекта\",\n  ldhName: \"Домен\",\n  handle: \"Хэндл\",\n\n  ripn_state1: \"Статус регистрации #1\",\n  ripn_state2: \"Статус регистрации #2\",\n\n  // ИНН\n  ripn_tax_payer_number: \"ИНН владельца\",\n  entities2_publicIds1_identifier: \"ИНН владельца (publicIds)\",\n\n  // Registrar\n  entities1_handle: \"Код регистратора\",\n  entities1_roles1: \"Роль регистратора\",\n  entities1_vcardArray2_14: \"Название регистратора\",\n  entities1_vcardArray2_24: \"Registrar EN\",\n  entities1_vcardArray2_44: \"Телефон регистратора\",\n  entities1_vcardArray2_54: \"Email регистратора\",\n  entities1_links1_href: \"Контакт регистратора\",\n  entities1_port43: \"WHOIS-сервер регистратора\",\n\n  entities2_roles1: \"Роль владельца\",\n  entities2_vcardArray2_14: \"Название владельца\",\n  entities2_vcardArray2_24: \"Владелец EN\",\n  entities2_publicIds1_type: \"Тип идентификатора владельца\",\n\n\n\n  links1_href: \"Админ-контакт WHOIS\",\n\n  secureDNS_delegationSigned: \"DNSSEC включён\"\n};\n\n\nconst WHOIS_IGNORE_KEYS = [\n  \"rdapConformance1\",\n  \"rdapConformance2\",\n  \"entities1_objectClassName\",\n  \"entities2_objectClassName\",\n  \"nameservers1_objectClassName\",\n  \"nameservers2_objectClassName\",\n  \"nameservers3_objectClassName\",\n  \"nameservers4_objectClassName\",\n  \"entities1_links1_rel\",\n  \"entities1_links1_type\",\n  \"links1_rel\",\n  \"entities2_ripn_tax_payer_number\",\n  \"nameservers1_ldhName\",\n  \"nameservers2_ldhName\",\n  \"nameservers3_ldhName\",\n  \"nameservers4_ldhName\",\n  \"events1_eventAction\",\n  \"events1_eventDate\",\n  \"events2_eventAction\",\n  \"events2_eventDate\",\n  \"events3_eventAction\",\n  \"events3_eventDate\",\n  \"events4_eventAction\",\n  \"events4_eventDate\"\n  ]\n\nconst IGNORE_PATTERNS = [\n  /^entities\\d+_vcardArray/,  \n  /_language$/,               \n  /_type$/,                   \n  /\\d+$/,                    \n  /^handle$/,                \n];\n\n\nfunction flatten(obj, prefix = '', res = {}) {\n  if (!obj || typeof obj !== 'object') return res;\n\n  for (const [key, val] of Object.entries(obj)) {\n    const newKey = prefix ? `${prefix}_${key}` : key;\n\n    if (Array.isArray(val)) {\n      val.forEach((v, i) => {\n        if (typeof v === 'object' && v !== null) {\n          flatten(v, `${newKey}${i + 1}`, res);\n        } else {\n          res[`${newKey}${i + 1}`] = v;\n        }\n      });\n    } else if (typeof val === 'object' && val !== null) {\n      flatten(val, newKey, res);\n    } else {\n      res[newKey] = val;\n    }\n  }\n  return res;\n}\n\nfunction shouldIgnoreKey(key) {\n  if (WHOIS_LABELS[key]) return false;\n\n  if (WHOIS_IGNORE_KEYS.includes(key)) return true;\n  return IGNORE_PATTERNS.some((p) => p.test(key));\n}\n\nfunction whoisToReadableString(obj) {\n  const flat = flatten(obj);\n  let str = \"\";\n\n  for (const [key, value] of Object.entries(flat)) {\n    if (shouldIgnoreKey(key)) continue;\n\n    const label = WHOIS_LABELS[key] || key;\n    str += `${label}: ${value}\\n`;\n  }\n\n  return str.trim();\n}\n\nfunction extractData(html) {\n  if (!html) return { phones: [], emails: [], inns: [] };\n\n  const text = html\n    .replace(/<script[\\s\\S]*?<\\/script>/gi, \" \")\n    .replace(/<style[\\s\\S]*?<\\/style>/gi, \" \")\n    .replace(/<[^>]*>/g, \" \")\n    .replace(/\\s{2,}/g, \" \")\n    .trim();\n\n  const phoneRegex = /(?:\\+7|7|8)(?:[\\s\\-()]*\\d){10}\\b/g;\n\n  const phones = Array.from(\n    new Set(\n      (text.match(phoneRegex) || [])\n        .map((p) => p.replace(/[^\\d+]/g, \"\"))\n        .map((p) => p.replace(/^8/, \"+7\").replace(/^7/, \"+7\"))\n    )\n  );\n\n  const emailRegex = /(?:mailto:)?[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}/gi;\n\n  const emails = Array.from(\n    new Set((text.match(emailRegex) || []).map((e) => e.replace(/^mailto:/i, \"\")))\n  );\n\n  const innRegex = /(?:ИНН|INN|Tax[\\s-]?ID|ИHH|ИHН)[^0-9]{0,10}(\\d{10,12})/gi;\n\n  const inns = Array.from(\n    new Set([...text.matchAll(innRegex)].map((m) => m[1]).filter(Boolean))\n  );\n\n  return { phones, emails, inns };\n}\n\nfunction normalizeWhois(raw) {\n  if (!raw) return {};\n\n  if (raw.json && typeof raw.json === \"object\") raw = raw.json;\n\n  if (typeof raw.data === \"string\") {\n    try { return JSON.parse(raw.data); } catch {}\n  }\n\n  if (typeof raw === \"string\") {\n    try { return JSON.parse(raw); } catch {}\n  }\n\n  return raw;\n}\n\nfunction extractInnFromWhois(whois) {\n  if (!whois || typeof whois !== \"object\") return [];\n\n  const inns = new Set();\n\n  if (whois.ripn_tax_payer_number) inns.add(whois.ripn_tax_payer_number);\n\n  if (Array.isArray(whois.entities)) {\n    whois.entities.forEach((ent) => {\n      if (!Array.isArray(ent.publicIds)) return;\n      ent.publicIds.forEach((pid) => {\n        if (pid.type?.toLowerCase().includes(\"tax\") && pid.identifier) {\n          inns.add(pid.identifier);\n        }\n      });\n    });\n  }\n\n  return Array.from(inns);\n}\n\nfunction extractPhonesFromWhois(whois) {\n  if (!whois || typeof whois !== \"object\") return [];\n\n  const phones = new Set();\n\n  function isValidPhone(num) {\n    const raw = String(num).trim();\n    const digits = raw.replace(/[^\\d]/g, \"\");\n\n    if (/^\\d{10,14}$/.test(raw)) return false;\n\n    if (!/[+\\-()\\s]/.test(raw)) return false;\n\n    if (digits.length < 10 || digits.length > 15) return false;\n\n    if (\n      raw.startsWith(\"+7\") ||\n      raw.startsWith(\"8\") ||\n      raw.startsWith(\"(7\") ||\n      raw.startsWith(\"+380\") ||\n      raw.startsWith(\"+1\") ||\n      raw.startsWith(\"+44\") ||\n      raw.startsWith(\"+34\") ||\n      raw.startsWith(\"+49\")\n    ) {\n      return true;\n    }\n\n    return false;\n  }\n\n  function clean(num) {\n    let n = String(num).replace(/[^\\d+]/g, \"\");\n\n    if (n.startsWith(\"8\")) n = \"+7\" + n.slice(1);\n    if (n.startsWith(\"7\") && !n.startsWith(\"+7\")) n = \"+7\" + n.slice(1);\n\n    return n;\n  }\n\n  if (Array.isArray(whois.entities)) {\n    for (const ent of whois.entities) {\n      if (!Array.isArray(ent.vcardArray)) continue;\n\n      const v = ent.vcardArray[1] || [];\n      for (const item of v) {\n        if (item[0] === \"tel\" && item[3]) {\n          const ph = item[3];\n          if (isValidPhone(ph)) {\n            phones.add(clean(ph));\n          }\n        }\n      }\n    }\n  }\n\n  const flat = flatten(whois);\n\n  for (const value of Object.values(flat)) {\n    if (typeof value !== \"string\") continue;\n\n    const matches = value.match(/\\+?\\d[\\d\\s\\-()]{6,25}/g);\n    if (!matches) continue;\n\n    for (const ph of matches) {\n      if (isValidPhone(ph)) {\n        phones.add(clean(ph));\n      }\n    }\n  }\n\n  return Array.from(phones);\n}\n\nfunction uniq(arr) {\n  return Array.from(new Set((arr || []).filter(Boolean)));\n}\n\nconst total = Math.min(\n  mainResults.length,\n  contactPages.length,\n  whoIsResults.length\n);\n\nconst merged = [];\n\nfor (let i = 0; i < total; i++) {\n  const main = mainResults[i]?.json || {};\n  const contact = contactPages[i]?.json || {};\n  const rawWhois = whoIsResults[i];\n\n  const whois = normalizeWhois(rawWhois);\n\n  let cleanWhois = null;\n  try {\n    if (rawWhois?.json?.data) {\n      const parsed = JSON.parse(rawWhois.json.data);\n      if (!parsed.error) cleanWhois = parsed;\n    } else if (rawWhois?.json && typeof rawWhois.json === \"object\" && !rawWhois.json.error) {\n      cleanWhois = rawWhois.json;\n    } else if (typeof rawWhois === \"string\") {\n      const parsed = JSON.parse(rawWhois);\n      if (!parsed.error) cleanWhois = parsed;\n    } else if (whois && typeof whois === \"object\" && !whois.error) {\n      cleanWhois = whois;\n    }\n  } catch {}\n\n  const html = contact.data || contact.body || \"\";\n  const parsedContact = extractData(html);\n\n  const mainPhones = Array.isArray(main.Phones) ? main.Phones : [];\n  const mainEmails = Array.isArray(main.Emails) ? main.Emails : [];\n  const mainINN = Array.isArray(main.INN) ? main.INN : [];\n  const mainContactLinks = Array.isArray(main.ContactLinks)\n    ? main.ContactLinks\n    : [];\n\n  const whoisINNs = extractInnFromWhois(cleanWhois || whois);\n  const whoisPhones = extractPhonesFromWhois(cleanWhois || whois);\n\n  const finalINN = uniq([\n    ...mainINN,\n    ...parsedContact.inns,\n    ...whoisINNs,\n  ]);\n\n  const result = {\n    index: main.index || i + 1,\n    Source: main.Source || [],\n\n    Phones: uniq([\n      ...mainPhones,\n      ...parsedContact.phones,\n      ...whoisPhones\n    ]),\n\n    Emails: uniq([\n      ...mainEmails,\n      ...parsedContact.emails\n    ]),\n\n    INN: finalINN,\n\n    ContactLinks: uniq([...mainContactLinks])\n  };\n\n  if (cleanWhois) {\n    result.whoisData = whoisToReadableString(cleanWhois);\n  }\n\n  merged.push({ json: result });\n}\n\nreturn merged;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2208,
+        896
+      ],
+      "id": "e5639d6b-a42d-4ba4-b0e8-72a18ea2e9b9",
+      "name": "Парсинг данных с контактов и Merge"
+    },
+    {
+      "parameters": {
+        "url": "=https://egrul.nalog.ru/vyp-download/{{ $('Wait').item.json.t }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1328,
+        1152
+      ],
+      "id": "dbb79843-0544-46a0-93e9-c511a1eb7358",
+      "name": "Получение файла",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "name": "={{ $('Получение файла').item.json.t }}",
+        "driveId": {
+          "__rl": true,
+          "value": "My Drive",
+          "mode": "list",
+          "cachedResultName": "My Drive",
+          "cachedResultUrl": "https://drive.google.com/drive/my-drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "value": "1_Zut2CwQO169D2TLQgQDY7KscLRQYo9D",
+          "mode": "list",
+          "cachedResultName": "Neuro",
+          "cachedResultUrl": "https://drive.google.com/drive/folders/1_Zut2CwQO169D2TLQgQDY7KscLRQYo9D"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        1552,
+        1152
+      ],
+      "id": "71199039-ad8e-4b55-ba3f-5720d170e8fb",
+      "name": "Upload file",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 2000,
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "CpsyquP758VdLS2b",
+          "name": "Google Drive account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "ab91455f-ab34-42ef-917a-a47ccf9d9f3d",
+              "leftValue": "={{ $('Парсинг данных с контактов и Merge').item.json.INN[0] }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2640,
+        896
+      ],
+      "id": "0d191496-021e-4b91-b486-bde1d383fd83",
+      "name": "If1"
+    },
+    {
+      "parameters": {
+        "url": "={{ $('Crypto').item.json.pageUrl }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1328,
+        896
+      ],
+      "id": "56bef739-3f7e-43e0-9add-210df4c6130c",
+      "name": "GET HTML по ImagePageUrl",
+      "retryOnFail": true,
+      "waitBetweenTries": 2000,
+      "maxTries": 2,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "=https://archive.org/wayback/available?url= {{ $('Crypto').item.json.pageUrl }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2416,
+        896
+      ],
+      "id": "3dabcdc0-c497-4b7f-b36e-e7408e7d702d",
+      "name": "Web Archive",
+      "retryOnFail": true,
+      "waitBetweenTries": 2000,
+      "maxTries": 2,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "batchSize": 2,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        224,
+        736
+      ],
+      "id": "2d7deab4-9aee-4796-9b09-b0d5fbc423bb",
+      "name": "Loop Over Items"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        2912,
+        1120
+      ],
+      "id": "e121139f-6f7e-436b-8ead-b3bc967dc257",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.ContactLinks[0] }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1760,
+        896
+      ],
+      "id": "bcaf209a-2945-4fe9-a69d-4ec0191c15f3",
+      "name": "GET HTML страницы контактов",
+      "retryOnFail": true,
+      "waitBetweenTries": 2000,
+      "maxTries": 2,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "=https://cctld.ru/tci-ripn-rdap/domain/{{ $('Поиск главного домена и URL для whois').item.json.whoisDomain }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        1984,
+        896
+      ],
+      "id": "052f624b-b1c1-47ac-94c0-78dc8dcb4dd5",
+      "name": "GET Whois",
+      "retryOnFail": true,
+      "waitBetweenTries": 2000,
+      "maxTries": 2,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().map(item => {\n  const inputUrl = item.json.url;\n  const pageImageUrl = item.json.pageUrl;\n\n  let mainUrl = null;\n  let whoisDomain = null;\n\n  const ignored = [\n    // \"dzen\",\n    // \"pinterest\",\n    // \"auto.ru\",\n    \"testtesttest\"\n  ];\n\n  function extractHostname(url) {\n    const match = url?.match(/^https?:\\/\\/([^\\/?#]+)/i);\n    return match ? match[1].toLowerCase() : null;\n  }\n\n  function cleanDomain(host) {\n    if (!host) return null;\n\n    host = host.replace(/^www\\./, \"\");\n\n    const parts = host.split(\".\");\n\n    if (parts.length >= 2) {\n      return parts.slice(-2).join(\".\");\n    }\n\n    return host;\n  }\n\n  function isValidDomain(host) {\n    if (!host) return false;\n\n    // проверка на игнорируемые домены\n    for (const bad of ignored) {\n      if (host.includes(bad)) return false;\n    }\n\n    // только .ru или .рф\n    return host.endsWith(\".ru\") || host.endsWith(\".рф\");\n  }\n\n  if (inputUrl) {\n    const mainMatch = inputUrl.match(/^(https?:\\/\\/[^\\/?#]+)/i);\n    mainUrl = mainMatch ? mainMatch[1] : null;\n  }\n\n  let hostPage = extractHostname(pageImageUrl);\n  hostPage = cleanDomain(hostPage);\n\n  if (isValidDomain(hostPage)) {\n    whoisDomain = hostPage;\n  } else {\n    let hostMain = extractHostname(mainUrl);\n    hostMain = cleanDomain(hostMain);\n\n    if (isValidDomain(hostMain)) {\n      whoisDomain = hostMain;\n    } else {\n      whoisDomain = null;\n    }\n  }\n\n  return {\n    json: {\n      mainUrl,\n      whoisDomain\n    }\n  };\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        896
+      ],
+      "id": "991c37f3-7093-4852-9427-eeb70a0e778f",
+      "name": "Поиск главного домена и URL для whois"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $('Получение данных по ИНН').all(); \nconst output = [];\n\nconst LABELS = {\n  c: \"Название\",\n  n: \"Юридическое название\",\n  g: \"Руководитель\",\n  i: \"ИНН\",\n  p: \"КПП\",\n  o: \"ОГРН\",\n  r: \"Дата регистрации\",\n  rn: \"Регион\",\n  k: \"Тип организации\",\n  t: \"Хеш (служебное поле)\",\n  cnt: \"Количество\",\n  pg: \"Страница\",\n  tot: \"Всего записей\"\n};\n\nfunction mapKeys(row) {\n  const mapped = {};\n  const textLines = [];\n\n  for (const key in row) {\n    const label = LABELS[key] || key; // если метки нет — оставляем ключ\n    const value = row[key];\n\n    mapped[label] = value;\n    textLines.push(`${label}: ${value}`);\n  }\n\n  return {\n    mapped,\n    text: textLines.join(\"\\n\")\n  };\n}\n\nfor (let item of input) {\n  const rows = item.json.rows;\n  const row = rows && rows[0] ? rows[0] : {};\n\n  const { mapped, text } = mapKeys(row);\n\n  output.push({\n    json: {\n      egrul: mapped,\n      egrulData: text\n    }\n  });\n}\n\nreturn output;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        1152
+      ],
+      "id": "18a8160e-ac44-44f6-b3e2-08b2f67a3161",
+      "name": "Egrul Data"
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "documentId": {
+          "__rl": true,
+          "value": "1ORvFOD1B9ms7wLtamXjtR2TXal0jqfMClkb0_fDt96c",
+          "mode": "list",
+          "cachedResultName": "Таблицы нарушений",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1ORvFOD1B9ms7wLtamXjtR2TXal0jqfMClkb0_fDt96c/edit?usp=drivesdk"
+        },
+        "title": "={{ $('Форма').item.json['Название листа'] }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -448,
+        736
+      ],
+      "id": "34b91fc5-94b7-4007-a3bf-d681727bad07",
+      "name": "Создание нового листа по названию",
+      "executeOnce": false,
+      "retryOnFail": true,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "gcTWA4tK2HeG2mT6",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://script.google.com/macros/s/AKfycbwQcgXzzmEs-JS5Sro-La92N81M6t818n5WE_UrOapMCgMA_-ZepiINMP3AwoC3cqXBkg/exec",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "action",
+              "value": "hideSheet"
+            },
+            {
+              "name": "sheetName",
+              "value": "={{ $('Форма').item.json['Название листа'] }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        -240,
+        736
+      ],
+      "id": "154df7c2-0b22-493e-a9b0-3ce6bf6b47aa",
+      "name": "Скрыть лист",
+      "retryOnFail": true,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://script.google.com/macros/s/AKfycbwQcgXzzmEs-JS5Sro-La92N81M6t818n5WE_UrOapMCgMA_-ZepiINMP3AwoC3cqXBkg/exec",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "action",
+              "value": "insertCheckbox"
+            },
+            {
+              "name": "sheetName",
+              "value": "={{ $('Форма').item.json['Название листа'] }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        448,
+        608
+      ],
+      "id": "3a930a89-38a7-4b94-9cd1-c17584c15db4",
+      "name": "Поставить ChecBox",
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://script.google.com/macros/s/AKfycbwQcgXzzmEs-JS5Sro-La92N81M6t818n5WE_UrOapMCgMA_-ZepiINMP3AwoC3cqXBkg/exec",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "action",
+              "value": "showSheet"
+            },
+            {
+              "name": "sheetName",
+              "value": "={{ $('Форма').item.json['Название листа'] }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        672,
+        608
+      ],
+      "id": "932b94ac-aadb-4d24-a0e1-e947a2a17c15",
+      "name": "Показать лист",
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1ORvFOD1B9ms7wLtamXjtR2TXal0jqfMClkb0_fDt96c",
+          "mode": "list",
+          "cachedResultName": "Таблицы нарушений",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1ORvFOD1B9ms7wLtamXjtR2TXal0jqfMClkb0_fDt96c/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "={{ $('Форма').item.json['Название листа'] }}",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "id": "={{ $('Crypto').item.json.data }}",
+            "Просмотр изображения": "==IMAGE(\"{{ $('Crypto').item.json.url }}\"; 4; 120; 120)",
+            "URL изображения": "={{ $('Crypto').item.json.url }}",
+            "Хост": "={{ $('Crypto').item.json.host }}",
+            "Страница изображения": "={{ $('Crypto').item.json.pageUrl }}",
+            "Основной сайт": "={{ $('Поиск главного домена и URL для whois').item.json.mainUrl }}",
+            "Страница контактов": "={{ $('Парсинг данных с контактов и Merge').item.json.ContactLinks.join('\\n') }}",
+            "Телефон": "='{{ $('Парсинг данных с контактов и Merge').item.json.Phones.join('\\n') }}",
+            "Автор": "={{ $('Форма').item.json['Автор'] }}",
+            "Email": "={{ $('Парсинг данных с контактов и Merge').item.json.Emails.join('\\n') }}",
+            "ИНН": "={{ $('Парсинг данных с контактов и Merge').item.json.INN.join('\\n') }}",
+            "Web-архив": "={{ $('Web Archive').item.json.archived_snapshots.closest.url }}",
+            "Информация WHOIS": "={{ $('Парсинг данных с контактов и Merge').item.json.whoisData }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "checkBox",
+              "displayName": "checkBox",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "id",
+              "displayName": "id",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Просмотр изображения",
+              "displayName": "Просмотр изображения",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "URL изображения",
+              "displayName": "URL изображения",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Хост",
+              "displayName": "Хост",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Страница изображения",
+              "displayName": "Страница изображения",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Основной сайт",
+              "displayName": "Основной сайт",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Страница контактов",
+              "displayName": "Страница контактов",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Автор",
+              "displayName": "Автор",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Телефон",
+              "displayName": "Телефон",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Email",
+              "displayName": "Email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "ИНН",
+              "displayName": "ИНН",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Файл ЕГРЮЛ",
+              "displayName": "Файл ЕГРЮЛ",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Web-архив",
+              "displayName": "Web-архив",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Информация ЕГРЮЛ",
+              "displayName": "Информация ЕГРЮЛ",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Информация WHOIS",
+              "displayName": "Информация WHOIS",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        2864,
+        912
+      ],
+      "id": "1e319edd-04e4-4dad-a822-bf0975fc3ef7",
+      "name": "Вставка данных без Egrul",
+      "retryOnFail": true,
+      "waitBetweenTries": 2000,
+      "maxTries": 2,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "gcTWA4tK2HeG2mT6",
+          "name": "Google Sheets account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1ORvFOD1B9ms7wLtamXjtR2TXal0jqfMClkb0_fDt96c",
+          "mode": "list",
+          "cachedResultName": "Таблицы нарушений",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1ORvFOD1B9ms7wLtamXjtR2TXal0jqfMClkb0_fDt96c/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "={{ $('Форма').item.json['Название листа'] }}",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "id": "={{ $('Crypto').item.json.data }}",
+            "Просмотр изображения": "==IMAGE(\"{{ $('Crypto').item.json.url }}\"; 4; 120; 120)",
+            "URL изображения": "={{ $('Crypto').item.json.url }}",
+            "Хост": "={{ $('Crypto').item.json.host }}",
+            "Страница изображения": "={{ $('Crypto').item.json.pageUrl }}",
+            "Основной сайт": "={{ $('Поиск главного домена и URL для whois').item.json.mainUrl }}",
+            "Страница контактов": "={{ $('Парсинг данных с контактов и Merge').item.json.ContactLinks.join('\\n') }}",
+            "Телефон": "='{{ $('Парсинг данных с контактов и Merge').item.json.Phones.join('\\n') }}",
+            "Автор": "={{ $('Форма').item.json['Автор'] }}",
+            "Email": "={{ $('Парсинг данных с контактов и Merge').item.json.Emails.join('\\n') }}",
+            "Web-архив": "={{ $('Web Archive').item.json.archived_snapshots.closest.url }}",
+            "Файл ЕГРЮЛ": "={{ $('Upload file').item ? $('Upload file').item.json.webViewLink : null }}",
+            "ИНН": "={{ $('Парсинг данных с контактов и Merge').item.json.INN.join('\\n') }}",
+            "Информация ЕГРЮЛ": "={{ $json.egrulData }}",
+            "Информация WHOIS": "={{ $('Парсинг данных с контактов и Merge').item.json.whoisData }}"
+          },
+          "matchingColumns": [
+            "id"
+          ],
+          "schema": [
+            {
+              "id": "checkBox",
+              "displayName": "checkBox",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "id",
+              "displayName": "id",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Просмотр изображения",
+              "displayName": "Просмотр изображения",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "URL изображения",
+              "displayName": "URL изображения",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Хост",
+              "displayName": "Хост",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Страница изображения",
+              "displayName": "Страница изображения",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Основной сайт",
+              "displayName": "Основной сайт",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Страница контактов",
+              "displayName": "Страница контактов",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Автор",
+              "displayName": "Автор",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Телефон",
+              "displayName": "Телефон",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Email",
+              "displayName": "Email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "ИНН",
+              "displayName": "ИНН",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Файл ЕГРЮЛ",
+              "displayName": "Файл ЕГРЮЛ",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Web-архив",
+              "displayName": "Web-архив",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Информация ЕГРЮЛ",
+              "displayName": "Информация ЕГРЮЛ",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Информация WHOIS",
+              "displayName": "Информация WHOIS",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        1984,
+        1152
+      ],
+      "id": "c5a18ded-7cf1-495c-9d91-74f8597737bc",
+      "name": "Вставка данных с Egrul",
+      "retryOnFail": true,
+      "waitBetweenTries": 2000,
+      "maxTries": 2,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "gcTWA4tK2HeG2mT6",
+          "name": "Google Sheets account"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://searchapi.api.cloud.yandex.net/v2/image/search_by_image",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "folderId",
+              "value": "b1gb138k9hcjgqeh8r1i"
+            },
+            {
+              "name": "data",
+              "value": "={{ $json.data }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -672,
+        736
+      ],
+      "id": "88cc102c-86fe-4421-915f-7d9e9a064002",
+      "name": "API запрос по изображению",
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "4orMGmGGzEJsH0Ye",
+          "name": "Yandex Cloud Search API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "formTitle": "Форма поиска нарушений",
+        "formDescription": "Загрузите изображение\nВведите название листа\nВведите имя автора если оно есть\nПоиск занимает от 15 до 30 минут. После чего, в основной таблице появится лист с результатами",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Изображение",
+              "fieldType": "file",
+              "acceptFileTypes": ".jpeg, .jpg, .png"
+            },
+            {
+              "fieldLabel": "Название листа"
+            },
+            {
+              "fieldLabel": "Автор"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.3,
+      "position": [
+        -1104,
+        736
+      ],
+      "id": "2c066a71-770f-4ad2-b3ee-d9865b8c5a3a",
+      "name": "Форма",
+      "webhookId": "873e8fd5-2627-4529-b991-2a7bbe6a7868"
+    },
+    {
+      "parameters": {
+        "operation": "binaryToPropery",
+        "binaryPropertyName": "___________",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [
+        -880,
+        736
+      ],
+      "id": "1de1f346-d75f-4f92-8990-342fbf0e9ebb",
+      "name": "Extract from File",
+      "alwaysOutputData": false
+    },
+    {
+      "parameters": {
+        "content": "## Ссылка на документацию\n**Двойной клик** [Guide](https://docs.n8n.io/workflows/sticky-notes/)\n\n## Форма запроса и получение похожих картинок через yandex cloud\n",
+        "height": 992,
+        "width": 1296,
+        "color": 3
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -1280,
+        416
+      ],
+      "id": "47d78625-0e27-4f7e-ac1d-712b98ab25b8",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "content": "## Get запросы на сайты для полчение HTML. А так же парсинг этих самых странц\n\n",
+        "height": 288,
+        "width": 2656,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        400,
+        816
+      ],
+      "id": "b9f6f467-bb39-47e9-a04c-cbee40ce5efd",
+      "name": "Sticky Note1"
+    },
+    {
+      "parameters": {
+        "content": "\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n## Отправка ИНН на Egrul и обработка данных с последующей загрузкой файла в гугл диск\n\n",
+        "height": 288,
+        "width": 2656,
+        "color": 5
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        400,
+        1104
+      ],
+      "id": "770ca3cb-70a3-4b0c-bc31-44cc13c3f0f7",
+      "name": "Sticky Note2"
+    },
+    {
+      "parameters": {
+        "content": "## doPost запросы на GoogleAppScript для показа листа и добавление checkbox для дальнейшей работы в таблице\n\n\n",
+        "height": 400,
+        "width": 592
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        400,
+        416
+      ],
+      "id": "3d1d8de6-3c9d-4f13-b904-8916474da6d2",
+      "name": "Sticky Note3"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Crypto": {
+      "main": [
+        [
+          {
+            "node": "Поиск главного домена и URL для whois",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GET HTML по MainURL": {
+      "main": [
+        [
+          {
+            "node": "GET HTML по Host",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GET HTML по Host": {
+      "main": [
+        [
+          {
+            "node": "GET HTML по ImagePageUrl",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Скрапинг Host и MainUrl": {
+      "main": [
+        [
+          {
+            "node": "GET HTML страницы контактов",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait": {
+      "main": [
+        [
+          {
+            "node": "Получение файла",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Поиск по ИНН": {
+      "main": [
+        [
+          {
+            "node": "Получение данных по ИНН",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Получение данных по ИНН": {
+      "main": [
+        [
+          {
+            "node": "Запрос на создание",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Запрос на создание": {
+      "main": [
+        [
+          {
+            "node": "Wait",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Парсинг данных с контактов и Merge": {
+      "main": [
+        [
+          {
+            "node": "Web Archive",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Получение файла": {
+      "main": [
+        [
+          {
+            "node": "Upload file",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If1": {
+      "main": [
+        [
+          {
+            "node": "Поиск по ИНН",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Вставка данных без Egrul",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload file": {
+      "main": [
+        [
+          {
+            "node": "Egrul Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GET HTML по ImagePageUrl": {
+      "main": [
+        [
+          {
+            "node": "Скрапинг Host и MainUrl",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Web Archive": {
+      "main": [
+        [
+          {
+            "node": "If1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items": {
+      "main": [
+        [
+          {
+            "node": "Поставить ChecBox",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Crypto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GET HTML страницы контактов": {
+      "main": [
+        [
+          {
+            "node": "GET Whois",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GET Whois": {
+      "main": [
+        [
+          {
+            "node": "Парсинг данных с контактов и Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Поиск главного домена и URL для whois": {
+      "main": [
+        [
+          {
+            "node": "GET HTML по MainURL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Egrul Data": {
+      "main": [
+        [
+          {
+            "node": "Вставка данных с Egrul",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Создание нового листа по названию": {
+      "main": [
+        [
+          {
+            "node": "Скрыть лист",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Скрыть лист": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Поставить ChecBox": {
+      "main": [
+        [
+          {
+            "node": "Показать лист",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Вставка данных без Egrul": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Вставка данных с Egrul": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "API запрос по изображению": {
+      "main": [
+        [
+          {
+            "node": "Создание нового листа по названию",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Форма": {
+      "main": [
+        [
+          {
+            "node": "Extract from File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract from File": {
+      "main": [
+        [
+          {
+            "node": "API запрос по изображению",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "ed265ab9-e397-4b87-a70c-508d2b20cbee",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "5ead4e1777d66c00ab18281081170ab50795af19ccf34609d1033f0baf738ec2"
+  },
+  "id": "MmRffjF1iKJRZ0mE",
+  "tags": []
+}
