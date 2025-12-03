@@ -1057,8 +1057,8 @@
     },
     {
       "parameters": {
-        "content": "## Ссылка на документацию\n**Двойной клик** [Guide](https://docs.n8n.io/workflows/sticky-notes/)\n\n## Форма запроса и получение похожих картинок через yandex cloud\n",
-        "height": 992,
+        "content": "## Ссылка на документацию [Guide](https://github.com/almasmuratov2004-byte/n8n-workflows/tree/main/%D0%9F%D0%BE%D0%B8%D1%81%D0%BA%20%D0%BD%D0%B0%D1%80%D1%83%D1%88%D0%B5%D0%BD%D0%B8%D0%B9%20-%20%D0%9D%D0%B0%D1%82%D0%B0%D0%BB%D1%8C%D1%8F)\n\n## Форма запроса и получение похожих картинок через yandex cloud\n",
+        "height": 976,
         "width": 1296,
         "color": 3
       },
@@ -1117,6 +1117,19 @@
       ],
       "id": "3d1d8de6-3c9d-4f13-b904-8916474da6d2",
       "name": "Sticky Note3"
+    },
+    {
+      "parameters": {
+        "jsCode": "const images = $('API запрос по изображению').first().json.images\n\nreturn images.map(img => ({\n  json: {\n    pageTitle: img.pageTitle || null,\n    pageUrl: img.pageUrl || null,\n    host: img.host || null,\n    url: img.url || null,\n    width: img.width || null,\n    height: img.height || null,\n    format: img.format || null,\n    passage: img.passage || null\n  }\n}));\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        0,
+        736
+      ],
+      "id": "431e0b53-a67b-4c2b-9f2a-da03e32013a2",
+      "name": "Code in JavaScript"
     }
   ],
   "pinData": {},
@@ -1370,7 +1383,7 @@
       "main": [
         [
           {
-            "node": "Loop Over Items",
+            "node": "Code in JavaScript",
             "type": "main",
             "index": 0
           }
@@ -1442,13 +1455,24 @@
           }
         ]
       ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
   "active": true,
   "settings": {
     "executionOrder": "v1"
   },
-  "versionId": "ed265ab9-e397-4b87-a70c-508d2b20cbee",
+  "versionId": "6198d35b-c153-4528-b91d-f3a3d29a0bb6",
   "meta": {
     "templateCredsSetupCompleted": true,
     "instanceId": "5ead4e1777d66c00ab18281081170ab50795af19ccf34609d1033f0baf738ec2"
